@@ -18,13 +18,13 @@ from datetime import datetime, timedelta
 
 # Define the ETF symbols
 #etf_symbols = ['SPY', 'QQQ', 'BND', 'AGG', 'GLD', 'AGGH', 'IWM', 'VTV', 'VUG', 'XLK']
-etf_symbols = ['CSSPX.MI', 'EQQQ.DE', 'QQQ3.MI', 'XS2D.L', 'LVE.PA', 'AEEM.PA', 'SGLD.MI', 'XGSH.MI', 'CSBGU7.MI', 'ZPRV.DE', 'SXLK.MI', 'XDWH.DE']
+#etf_symbols = ['CSSPX.MI', 'EQQQ.DE', 'QQQ3.MI', 'XS2D.L', 'LVE.PA', 'AEEM.PA', 'SGLD.MI', 'XGSH.MI', 'CSBGU7.MI', 'ZPRV.DE', 'SXLK.MI', 'XDWH.DE']
 #etf_symbols = ['CSSPX.MI', 'EQQQ.DE', 'QQQ3.MI', 'QDVI.DE', 'XS2D.L', '3FNE.L', '0W9J.IL', 'LVE.PA', 'EMVL.L', 'SGLD.MI', 'XGSH.MI', 'CSBGU7.MI', 'ZPRV.DE', 'SXLK.MI', 'XDWH.DE']
 #etf_symbols = ['VTI', 'AGG', 'DBC', 'VIXY']
-#etf_symbols = ['SPY', 'QQQ', 'TLT', 'QLD', 'PSQ', 'SHV', 'IEF', 'SSO', 'QID', 'SMH', 'USD', 'GLD', 'UUP', 'IEI']
+etf_symbols = ['SPY', 'QQQ', 'TLT', 'QLD', 'SHV', 'IEF', 'SSO', 'SMH', 'USD', 'GLD', 'UUP', 'IEI']
 
 # Set warmup period
-n_periods = 50
+n_periods = 126
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Portfolio Optimization using Deep Learning')
@@ -54,19 +54,23 @@ def download_data(etf_symbols, warm_date, start_date, end_date):
 def performance_metrics(portfolio_values):
     returns = np.diff(portfolio_values) / portfolio_values[:-1]
     cumulative_returns = np.cumprod(1 + returns) - 1
-    drawdown = np.min(1 - cumulative_returns / np.maximum.accumulate(cumulative_returns))
+    drawdown = np.min(1 - cumulative_returns)  # Corrected drawdown calculation
     sharpe_ratio = np.sqrt(252) * np.mean(returns) / np.std(returns)
+    
+    cagr = (portfolio_values[-1] / portfolio_values[0]) ** (252 / len(portfolio_values)) - 1  # CAGR calculation
+
     
     print(f"Daily Returns: {returns[-1]*100:.2f}%")
     print(f"Cumulative Returns: {cumulative_returns[-1]*100:.2f}%")
     print(f"Max Drawdown: {drawdown*100:.2f}%")
     print(f"Sharpe Ratio: {sharpe_ratio:.4f}")
+    print(f"CAGR: {cagr*100:.2f}%")
 
 args = parse_arguments()
 start_date = datetime(2018, 1, 1)
 end_date = datetime.today()
 
-warmdate = start_date - timedelta(n_periods*3)
+warmdate = start_date - timedelta(n_periods*1.5)
 # Download historical data
 retnormall, retnormall_df, histret, histalldata = download_data(etf_symbols, warmdate, start_date, end_date)
 retnormall_df = retnormall_df.shift()
@@ -102,16 +106,24 @@ for index, row in histret.iterrows():
         train_size = int(len(window_data) * 0.5)
         X_train, X_test = window_data.iloc[:train_size], window_data.iloc[train_size:]
         
-        # Build a simple neural network model
         model = keras.Sequential([
-            keras.layers.Dense(10, activation='relu', input_shape=(len(etf_symbols),)),
+            keras.layers.Dense(128, activation='relu', input_shape=(len(etf_symbols),)),
+            keras.layers.BatchNormalization(),
+            keras.layers.Dropout(0.3),
+            keras.layers.Dense(64, activation='relu'),
+            keras.layers.BatchNormalization(),
+            keras.layers.Dropout(0.3),
+            keras.layers.Dense(32, activation='relu'),
+            keras.layers.BatchNormalization(),
+            keras.layers.Dropout(0.3),
             keras.layers.Dense(len(etf_symbols), activation='softmax')
         ])
-
-        model.compile(optimizer='adam', loss='mse')  # Using mean squared error as a loss function
-
+        
+        model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001), loss='mse')
+        
         # Train the model
         model.fit(X_train, X_test, epochs=10, batch_size=1, verbose=0)
+
 
         # Predict optimized weights
         predicted_weights = model.predict(np.array([window_data.iloc[-1]]))[0]
@@ -126,7 +138,7 @@ for index, row in histret.iterrows():
 performance_metrics(portfolio_values)
 
 # Plot portfolio values
-dates = histret.index[n_periods:]
+dates = histret.index[1:]
 plt.figure(figsize=(12, 6))
 plt.plot(dates, portfolio_values, label='Portfolio Value', color='blue')
 plt.title('Portfolio Performance')
