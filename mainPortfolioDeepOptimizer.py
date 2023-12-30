@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Fri Dec 29 14:49:07 2023
 https://europoor.com/how-to-buy-leveraged-etfs-from-europe/
 @author: simonlesflex
 """
+
 
 import pandas as pd
 import yfinance as yf
@@ -12,84 +11,147 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from sklearn.preprocessing import MinMaxScaler
-from scipy.optimize import minimize
 import matplotlib.pyplot as plt
+import argparse
+from datetime import datetime, timedelta
 
 # Define the ETF symbols
 #etf_symbols = ['SPY', 'QQQ', 'BND', 'AGG', 'GLD', 'AGGH', 'IWM', 'VTV', 'VUG', 'XLK']
 #etf_symbols = ['CSSPX.MI', 'EQQQ.DE', 'QQQ3.MI', 'XS2D.L', 'LVE.PA', 'AEEM.PA', 'SGLD.MI', 'XGSH.MI', 'CSBGU7.MI', 'ZPRV.DE', 'SXLK.MI', 'XDWH.DE']
-#etf_symbols = ['CSSPX.MI', 'EQQQ.DE', 'QQQ3.MI', 'XS2D.L', '3FNE.L', '0W9J.IL', 'LVE.PA', 'EMVL.L', 'SGLD.MI', 'XGSH.MI', 'CSBGU7.MI', 'ZPRV.DE', 'SXLK.MI', 'XDWH.DE']
+#etf_symbols = ['CSSPX.MI', 'EQQQ.DE', 'QQQ3.MI', 'QDVI.DE', 'XS2D.L', '3FNE.L', '0W9J.IL', 'LVE.PA', 'EMVL.L', 'SGLD.MI', 'XGSH.MI', 'CSBGU7.MI', 'ZPRV.DE', 'SXLK.MI', 'XDWH.DE']
 #etf_symbols = ['VTI', 'AGG', 'DBC', 'VIXY']
-etf_symbols = ['SPY', 'QQQ', 'TLT', 'QLD', 'PSQ', 'SHV', 'IEF', 'SSO', 'QID', 'SMH', 'USD', 'GLD', 'UUP', 'IEI']
+etf_symbols = ['SPY', 'QQQ', 'TLT', 'QLD', 'SHV', 'IEF', 'SSO', 'SMH', 'USD', 'GLD', 'UUP', 'IEI']
+
+# Set warmup period
+n_periods = 126
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Portfolio Optimization using Deep Learning')
+    parser.add_argument('--start_date', type=str, help='Start date in the format YYYY-MM-DD', required=False)
+    parser.add_argument('--end_date', type=str, help='End date in the format YYYY-MM-DD', required=False)
+    args = parser.parse_args()
+
+    # Set default values if arguments are empty
+    if not args.start_date:
+        args.start_date = '2022-01-01'  # Set your default start date
+    if not args.end_date:
+        args.end_date = '2023-12-31'  # Set your default end date
+
+    return args
+
+def download_data(etf_symbols, warm_date, start_date, end_date):
+    dataall = yf.download(etf_symbols, start=warm_date, end=end_date)['Adj Close']
+    returnsall = dataall.pct_change().dropna()
+    retnormall_df = returnsall
+    returnssub = returnsall[start_date:]
+    data = dataall
+    
+    scaler = MinMaxScaler()
+    returns_normalized = scaler.fit_transform(retnormall_df)
+    return returns_normalized, retnormall_df, returnssub, data
+
+def performance_metrics(portfolio_values):
+    returns = np.diff(portfolio_values) / portfolio_values[:-1]
+    cumulative_returns = np.cumprod(1 + returns) - 1
+    drawdown = np.min(1 - cumulative_returns)  # Corrected drawdown calculation
+    sharpe_ratio = np.sqrt(252) * np.mean(returns) / np.std(returns)
+    
+    cagr = (portfolio_values[-1] / portfolio_values[0]) ** (252 / len(portfolio_values)) - 1  # CAGR calculation
+
+    
+    print(f"Daily Returns: {returns[-1]*100:.2f}%")
+    print(f"Cumulative Returns: {cumulative_returns[-1]*100:.2f}%")
+    print(f"Max Drawdown: {drawdown*100:.2f}%")
+    print(f"Sharpe Ratio: {sharpe_ratio:.4f}")
+    print(f"CAGR: {cagr*100:.2f}%")
+
+
+args = parse_arguments()
+start_date = datetime(2018, 1, 1)
+end_date = datetime.today()
+
+warmdate = start_date - timedelta(n_periods*1.5)
 # Download historical data
-data = yf.download(etf_symbols, start='2022-01-01', end='2023-01-01')['Adj Close']
+retnormall, retnormall_df, histret, histalldata = download_data(etf_symbols, warmdate, start_date, end_date)
+retnormall_df = retnormall_df.shift()
 
-# Calculate daily returns
-returns = data.pct_change().dropna()
+lendif = len(retnormall_df) - len(histret)
 
-# Function to calculate Sharpe Ratio
-def sharpe_ratio(weights, returns):
-    portfolio_return = np.dot(returns.mean(), weights)
-    portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(returns.cov(), weights)))
-    return -portfolio_return / portfolio_volatility
+# Initialize variables
+data_window = []
+model = None
+portfolio_values = []
+MonthlyPortfolioW = []
+month = 0
 
-# Normalizing data
-scaler = MinMaxScaler()
-returns_normalized = scaler.fit_transform(returns)
+# Iterate on a daily basis
+for index, row in histret.iterrows():
 
-# Split data into features (X) and target (y)
-X = returns_normalized[:-1]
-y = returns_normalized[1:]
+    # Use a rolling window of historical data for each iteration
+    window_data = retnormall_df.loc[:(index)][-n_periods:]
+    
+    if month != 0:
+        # Measure daily performance
+        daily_returns = np.sum(MonthlyPortfolioW * retnormall_df.loc[index])
+        if not portfolio_values:
+            portfolio_values.append(1 + daily_returns)
+        else:
+            portfolio_values.append(portfolio_values[-1] * (1 + daily_returns))
 
-# Build a simple neural network model
-model = keras.Sequential([
-    keras.layers.Dense(10, activation='relu', input_shape=(len(etf_symbols),)),
-    keras.layers.Dense(len(etf_symbols), activation='softmax')
-])
+    # Check if a month has passed to trigger rebalance
+    if month != index.month:
+        month = index.month
+        datestr = str(index)[:10]
+        # Split data into features (X) and target (y)
+        train_size = int(len(window_data) * 0.5)
+        X_train, X_test = window_data.iloc[:train_size], window_data.iloc[train_size:]
+        
+        model = keras.Sequential([
+            keras.layers.Dense(128, activation='relu', input_shape=(len(etf_symbols),)),
+            keras.layers.BatchNormalization(),
+            keras.layers.Dropout(0.3),
+            keras.layers.Dense(64, activation='relu'),
+            keras.layers.BatchNormalization(),
+            keras.layers.Dropout(0.3),
+            keras.layers.Dense(32, activation='relu'),
+            keras.layers.BatchNormalization(),
+            keras.layers.Dropout(0.3),
+            keras.layers.Dense(len(etf_symbols), activation='softmax')
+        ])
+        
+        model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001), loss='mse')
+        
+        # Train the model
+        model.fit(X_train, X_test, epochs=10, batch_size=1, verbose=0)
 
-model.compile(optimizer='adam', loss='mse')  # Using mean squared error as a loss function
 
-# Train the model
-model.fit(X, y, epochs=50, batch_size=1, verbose=0)
+        # Predict optimized weights
+        predicted_weights = model.predict(np.array([window_data.iloc[-1]]))[0]
 
-# Predict optimized weights
-predicted_weights = model.predict(np.array([returns_normalized[-1]]))[0]
+        # Display results
+        print(f"Predicted Weights for Day {datestr}: {predicted_weights}")
 
-# Constraint: weights sum to 1
-constraints = ({'type': 'eq', 'fun': lambda w: sum(w) - 1})
+    MonthlyPortfolioW = np.round(predicted_weights, 2)
+    
 
-# Bounds: weights between 0 and 1
-bounds = tuple((0, 1) for _ in range(len(etf_symbols)))
+# Display performance metrics
+performance_metrics(portfolio_values)
 
-# Optimization
-result = minimize(sharpe_ratio, np.ones(len(etf_symbols)) / len(etf_symbols),
-                  args=(returns,), method='SLSQP', bounds=bounds, constraints=constraints)
-
-# Extract optimized weights from traditional optimization
-traditional_weights = result.x
-
-# Display results
-print("Traditional Optimization Weights:", traditional_weights)
-print("Deep Learning Predicted Weights:", predicted_weights)
-
-# Create a DataFrame
-predicted_portfolio_df = pd.DataFrame(list(zip(etf_symbols, predicted_weights)), columns=['Asset Ticker', 'Weight'])
-
-# Display the DataFrame
-print(predicted_portfolio_df)
-
+# Plot portfolio values
+dates = histret.index[1:]
+plt.figure(figsize=(12, 6))
+plt.plot(dates, portfolio_values, label='Portfolio Value', color='blue')
+plt.title('Portfolio Performance')
+plt.xlabel('Date')
+plt.ylabel('Portfolio Value')
+plt.legend()
+plt.show()
 
 # Pie plot
 labels = etf_symbols
 plt.figure(figsize=(12, 6))
 
-# Traditional Optimization
-plt.subplot(1, 2, 1)
-plt.pie(traditional_weights, labels=labels, autopct='%1.1f%%', startangle=90)
-plt.title('Traditional Optimization Portfolio Weights')
-
-# Deep Learning Prediction
-plt.subplot(1, 2, 2)
+# Deep Learning Prediction for the last window
 plt.pie(predicted_weights, labels=labels, autopct='%1.1f%%', startangle=90)
 plt.title('Deep Learning Prediction Portfolio Weights')
 
