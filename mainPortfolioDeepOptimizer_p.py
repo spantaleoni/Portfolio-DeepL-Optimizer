@@ -27,6 +27,7 @@ etf_symbols = ['SPY', 'QQQ', 'TLT', 'QLD', 'SHV', 'IEF', 'SSO', 'SMH', 'USD', 'G
 n_periods = 50
 # Initial Capital
 G_INITCAP = 10000
+G_REBALANCE = 'W'  # M for Monthly Rebalance, W for Weekly Rebalance
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Portfolio Optimization using Deep Learning')
@@ -56,7 +57,7 @@ def download_data(etf_symbols, warm_date, start_date, end_date):
 def performance_metrics(portfolio_values):
     returns = np.diff(portfolio_values) / portfolio_values[:-1]
     cumulative_returns = np.cumprod(1 + returns) - 1
-    drawdown = np.min(1 - cumulative_returns)  # Corrected drawdown calculation
+    drawdown = np.min(cumulative_returns)  # Corrected drawdown calculation
     sharpe_ratio = np.sqrt(252) * np.mean(returns) / np.std(returns)
     
     cagr = (portfolio_values[-1] / portfolio_values[0]) ** (252 / len(portfolio_values)) - 1  # CAGR calculation
@@ -80,7 +81,7 @@ def main():
     else:
         end_date = datetime.strptime(args.end_date, '%Y-%m-%d').date()
     
-    warmdate = start_date - timedelta(n_periods*1.5)
+    warmdate = start_date - timedelta(n_periods*2)
     # Download historical data
     retnormall, retnormall_df, histret, histalldata = download_data(etf_symbols, warmdate, start_date, end_date)
     retnormall_df = retnormall_df.shift()
@@ -93,6 +94,9 @@ def main():
     portfolio_values = []
     MonthlyPortfolioW = []
     month = 0
+    week = 0
+    init = 0
+    check = 0
     
     # Iterate on a daily basis
     for index, row in histret.iterrows():
@@ -100,7 +104,8 @@ def main():
         # Use a rolling window of historical data for each iteration
         window_data = retnormall_df.loc[:(index)][-n_periods:]
         
-        if month != 0:
+        #if month != 0:
+        if init != 0:
             # Measure daily performance
             daily_returns = np.sum(MonthlyPortfolioW * retnormall_df.loc[index])
             if not portfolio_values:
@@ -109,8 +114,15 @@ def main():
                 portfolio_values.append(portfolio_values[-1] * (1 + daily_returns))
     
         # Check if a month has passed to trigger rebalance
-        if month != index.month:
-            month = index.month
+        #if month != index.month:
+        if G_REBALANCE == 'M':
+            check = index.month
+        else:
+            check = index.week
+        
+        if init != check:
+            #month = index.month
+            init = check
             datestr = str(index)[:10]
             # Split data into features (X) and target (y)
             train_size = int(len(window_data) * 0.5)
@@ -119,20 +131,20 @@ def main():
             model = keras.Sequential([
                 keras.layers.Dense(64, activation='relu', input_shape=(len(etf_symbols),)),
                 keras.layers.BatchNormalization(),
-                keras.layers.Dropout(0.5),
+                keras.layers.Dropout(0.4),
                 keras.layers.Dense(32, activation='relu'),
                 keras.layers.BatchNormalization(),
-                keras.layers.Dropout(0.4),
+                keras.layers.Dropout(0.3),
                 keras.layers.Dense(16, activation='relu'),
                 keras.layers.BatchNormalization(),
                 keras.layers.Dropout(0.3),
                 keras.layers.Dense(len(etf_symbols), activation='softmax')
             ])
             
-            model.compile(optimizer=keras.optimizers.Adamax(learning_rate=0.001), loss='mse')
+            model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001), loss='mse')
             
             # Train the model
-            model.fit(X_train, X_test, epochs=10, batch_size=1, verbose=0)
+            model.fit(X_train.values, X_test.values, epochs=20, batch_size=1, verbose=0)
     
     
             # Predict optimized weights
