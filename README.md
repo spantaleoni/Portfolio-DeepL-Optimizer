@@ -34,7 +34,7 @@ The script fetches historical data for a selected set of ETFs, calculates daily 
 3. Execute the script:
 
    ```bash
-   python portfolio_optimization.py
+   python mainPortfolioDeepOptimizer_p.py --start_date 2016-01-01 --end_date 2023-12-31
    ```
 
 ## ETF Symbols
